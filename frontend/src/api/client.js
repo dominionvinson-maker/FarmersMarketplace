@@ -481,6 +481,7 @@ export const api = {
   adminRegisterContract: (body) => request('/admin/contracts', { method: 'POST', body }),
   adminDeployContract: (formData) => request('/admin/contracts/deploy', { method: 'POST', body: formData }),
   adminDeregisterContract: (id) => request(`/admin/contracts/${id}`, { method: 'DELETE' }),
+  adminGetContractConfig: (contractId) => request(`/contracts/${contractId}/config`),
   adminGetContractUpgrades: (registryId) => request(`/admin/contracts/${registryId}/upgrades`),
   adminRecordContractUpgrade: (registryId, body) =>
     request(`/admin/contracts/${registryId}/upgrade`, { method: 'POST', body }),

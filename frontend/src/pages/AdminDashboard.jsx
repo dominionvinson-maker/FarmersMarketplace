@@ -160,6 +160,7 @@ export default function AdminDashboard() {
 
   const [selectedRegistryId, setSelectedRegistryId] = useState(null);
   const [contractUpgrades, setContractUpgrades] = useState([]);
+  const [contractConfig, setContractConfig] = useState(null);
   const [upgradeDetailLoading, setUpgradeDetailLoading] = useState(false);
   const [upgradeDetailError, setUpgradeDetailError] = useState('');
   const [upgradeForm, setUpgradeForm] = useState({ old_wasm_hash: '', new_wasm_hash: '' });
@@ -403,6 +404,17 @@ export default function AdminDashboard() {
     setUpgradeSubmitMsg('');
     setUpgradeDetailError('');
     loadContractUpgrades(c.id);
+    loadContractConfig(c.contract_id);
+  }
+
+  async function loadContractConfig(contractId) {
+    setContractConfig({ loading: true });
+    try {
+      const res = await api.adminGetContractConfig(contractId);
+      setContractConfig(res.data ?? null);
+    } catch (e) {
+      setContractConfig({ error: e.message });
+    }
   }
 
   async function handleRecordUpgrade(e) {
@@ -714,6 +726,32 @@ export default function AdminDashboard() {
                 onClick={() => { setSelectedRegistryId(null); setContractUpgrades([]); setUpgradeSubmitMsg(''); setUpgradeDetailError(''); }}
                 style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid #ccc', background: '#fff', fontSize: 12, cursor: 'pointer' }}
               >Close</button>
+            </div>
+            <div style={{ marginBottom: 16 }}>
+              <strong style={{ fontSize: 13, color: '#333' }}>On-chain config</strong>
+              {contractConfig?.loading ? (
+                <div style={{ color: '#666', fontSize: 13 }}>Loading config…</div>
+              ) : contractConfig?.config || contractConfig?.snapshot ? (
+                <table style={{ ...s.table, marginTop: 8 }}>
+                  <tbody>
+                    {Object.entries(contractConfig.config || contractConfig.snapshot).map(([k, v]) => (
+                      <tr key={k}>
+                        <td style={s.td}>{k}</td>
+                        <td style={{ ...s.td, fontFamily: 'monospace', fontSize: 11, wordBreak: 'break-all' }}>
+                          {v === null || v === undefined ? '—' : String(v)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <div style={{ color: '#888', fontSize: 13 }}>
+                  {contractConfig?.error || 'No get_config() view available for this contract.'}
+                </div>
+              )}
+              {contractConfig?.snapshot_synced_at && (
+                <div style={{ fontSize: 11, color: '#888', marginTop: 4 }}>Snapshot synced {contractConfig.snapshot_synced_at}</div>
+              )}
             </div>
             <p style={{ fontSize: 12, color: '#666', marginBottom: 12 }}>
               Each row is immutable. <code style={{ fontSize: 11 }}>new_wasm_hash</code> must match the hash Soroban RPC reports for the contract after upgrade.

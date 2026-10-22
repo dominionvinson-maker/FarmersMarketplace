@@ -86,6 +86,24 @@ pub struct AllowanceValue {
 #[contract]
 pub struct RewardToken;
 
+/// Contract version reported by `version()`. (CT-28)
+pub const CONTRACT_VERSION: u32 = 1;
+
+/// Read-only snapshot of contract configuration. (CT-28)
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Config {
+    pub admin: Option<Address>,
+    pub pending_admin: Option<Address>,
+    pub minter: Option<Address>,
+    pub transfer_fee_bps: u32,
+    pub reward_rate_bps: u32,
+    pub max_redemption_bps: u32,
+    pub vesting_period: u32,
+    pub max_supply: i128,
+    pub version: u32,
+}
+
 #[contractimpl]
 impl RewardToken {
     /// Shared basis-point fee/royalty/reward-split calculation: `amount * bps / 10_000`.
@@ -835,6 +853,27 @@ impl RewardToken {
             .instance()
             .remove(&DataKey::AdminProposalExpiry);
         env.events().publish(("admin", "accepted"), pending);
+    }
+
+    /// Read-only view of the contract configuration. (CT-28)
+    pub fn get_config(env: Env) -> Config {
+        let store = env.storage().instance();
+        Config {
+            admin: store.get(&DataKey::Admin),
+            pending_admin: store.get(&DataKey::PendingAdmin),
+            minter: store.get(&DataKey::Minter),
+            transfer_fee_bps: Self::transfer_fee_bps(env.clone()),
+            reward_rate_bps: Self::reward_rate_bps(env.clone()),
+            max_redemption_bps: Self::max_redemption_bps(env.clone()),
+            vesting_period: Self::vesting_period(env.clone()),
+            max_supply: store.get(&DataKey::MaxSupply).unwrap_or(0),
+            version: CONTRACT_VERSION,
+        }
+    }
+
+    /// Contract code version. (CT-28)
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
     }
 }
 

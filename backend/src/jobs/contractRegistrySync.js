@@ -19,11 +19,18 @@
  * the job does NOT crash the process.  The next scheduled run (see startRegistrySync)
  * will attempt again, so a transient provider restart at startup is recovered from
  * automatically within one poll interval (SYNC_INTERVAL_MS).
+ *
+ * Config snapshots (CT-28)
+ * ------------------------
+ * After each pass, `syncConfigSnapshots` calls the read-only `get_config()` view on every
+ * registered contract, stores the result in contracts_registry.config_snapshot, and logs
+ * an alert (logger.error, tag `contract_config_changed`) when it differs from the stored one.
  */
 
 const db = require('../db/schema');
 const { server: horizonServer, isTestnet } = require('../utils/stellar-config');
 const logger = require('../logger');
+const { simulateContractCall } = require('../utils/stellar');
 
 const NETWORK = isTestnet ? 'testnet' : 'mainnet';
 const BASE_RETRY_DELAY_MS = parseInt(process.env.REGISTRY_SYNC_RETRY_DELAY_MS || '5000', 10);
@@ -175,6 +182,60 @@ async function runSync() {
   return { inserted, skipped, lastLedger: maxLedger };
 }
 
+/** Stable JSON so key order / BigInt values don't cause false change alerts. */
+function stableStringify(value) {
+  if (typeof value === 'bigint') return JSON.stringify(value.toString());
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(value[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/**
+ * Fetch get_config() for every registered contract on this network, store the snapshot,
+ * and alert when it changed since the last run. (CT-28)
+ * @returns {Promise<{checked: number, changed: string[]}>}
+ */
+async function syncConfigSnapshots() {
+  const { rows } = await db.query(
+    'SELECT contract_id, config_snapshot FROM contracts_registry WHERE network = $1',
+    [NETWORK]
+  );
+  const changed = [];
+  let checked = 0;
+
+  for (const row of rows) {
+    let sim;
+    try {
+      sim = await simulateContractCall(row.contract_id, 'get_config', []);
+    } catch (err) {
+      logger.warn('[contractRegistrySync] get_config failed', { contractId: row.contract_id, error: err.message });
+      continue;
+    }
+    if (!sim?.success) continue; // contract has no get_config view (e.g. pre-CT-28 WASM)
+    checked++;
+
+    const snapshot = stableStringify(sim.result);
+    if (row.config_snapshot && row.config_snapshot !== snapshot) {
+      changed.push(row.contract_id);
+      logger.error('[contractRegistrySync] Contract config changed unexpectedly', {
+        alert: 'contract_config_changed',
+        contractId: row.contract_id,
+        before: row.config_snapshot,
+        after: snapshot,
+      });
+    }
+    if (row.config_snapshot !== snapshot) {
+      await db.query(
+        'UPDATE contracts_registry SET config_snapshot = $1, config_synced_at = $2 WHERE contract_id = $3',
+        [snapshot, new Date().toISOString(), row.contract_id]
+      );
+    }
+  }
+  return { checked, changed };
+}
+
 /**
  * Start the periodic registry sync job.
  * Runs an initial sync immediately on startup (with retry/backoff built into
@@ -184,14 +245,15 @@ async function runSync() {
  */
 function startRegistrySync() {
   logger.info('[contractRegistrySync] Starting — sync interval every ' + SYNC_INTERVAL_MS + 'ms');
-  runSync().catch((err) =>
+  const pass = () => runSync().then(() => syncConfigSnapshots());
+  pass().catch((err) =>
     logger.error('[contractRegistrySync] Startup sync failed after all retries', { error: err.message })
   );
   return setInterval(() => {
-    runSync().catch((err) =>
+    pass().catch((err) =>
       logger.error('[contractRegistrySync] Scheduled sync failed', { error: err.message })
     );
   }, SYNC_INTERVAL_MS);
 }
 
-module.exports = { runSync, getHighWaterMark, setHighWaterMark, fetchDeployments, startRegistrySync };
+module.exports = { runSync, syncConfigSnapshots, stableStringify, getHighWaterMark, setHighWaterMark, fetchDeployments, startRegistrySync };

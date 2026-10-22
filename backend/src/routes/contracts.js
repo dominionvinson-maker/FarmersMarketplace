@@ -92,6 +92,39 @@ router.post('/:contractId/simulate', auth, adminAuth, async (req, res) => {
   return res.json(out);
 });
 
+// GET /api/contracts/:contractId/config  (admin only) — live get_config()/version() plus stored snapshot (CT-28)
+router.get('/:contractId/config', auth, adminAuth, async (req, res) => {
+  const { contractId } = req.params;
+  if (!validateContractId(contractId)) {
+    return err(res, 400, 'Invalid contractId format (base32 or hex expected)', 'invalid_contract_id');
+  }
+
+  const { rows } = await db.query(
+    'SELECT config_snapshot, config_synced_at FROM contracts_registry WHERE contract_id = $1',
+    [contractId],
+  );
+  if (!rows[0]) return err(res, 404, 'Contract not found', 'contract_not_found');
+
+  let live = null;
+  let error = null;
+  try {
+    const sim = await simulateContractCall(contractId, 'get_config', []);
+    // Round-trip through JSON so i128 BigInts become strings for res.json().
+    if (sim.success) live = JSON.parse(JSON.stringify(sim.result, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)));
+    else error = sim.error || 'get_config simulation failed';
+  } catch (e) {
+    error = e.message;
+  }
+
+  let snapshot = null;
+  try { snapshot = rows[0].config_snapshot ? JSON.parse(rows[0].config_snapshot) : null; } catch { /* ignore */ }
+
+  res.json({
+    success: true,
+    data: { config: live, snapshot, snapshot_synced_at: rows[0].config_synced_at || null, error },
+  });
+});
+
 // GET /api/contracts/:contractId/state?prefix=
 // Admins: unrestricted. Non-admins: only contracts linked to their own orders.
 router.get('/:contractId/state', auth, async (req, res) => {

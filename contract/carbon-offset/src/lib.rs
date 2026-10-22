@@ -69,6 +69,18 @@ pub struct CarbonOffset {
     pub verifier: Address,
 }
 
+/// Contract version reported by `version()`. (CT-28)
+pub const CONTRACT_VERSION: u32 = 1;
+
+/// Read-only snapshot of contract configuration. (CT-28)
+#[derive(Clone, Debug, PartialEq)]
+#[contracttype]
+pub struct Config {
+    pub admin: Option<Address>,
+    pub pending_admin: Option<Address>,
+    pub version: u32,
+}
+
 #[contract]
 pub struct CarbonOffsetContract;
 
@@ -343,6 +355,210 @@ impl CarbonOffsetContract {
             pending,
             (order_id, record.kg_co2),
         );
+        bump_instance(&env);
+    }
+
+    /// Replace this contract's WASM. Only the current admin may upgrade.
+    pub fn upgrade(env: Env, new_wasm_hash: BytesN<32>) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&ADMIN)
+            .expect("not initialized");
+        admin.require_auth();
+        if new_wasm_hash.to_array().iter().all(|byte| *byte == 0) {
+            panic!("WASM hash must not be zero");
+        }
+        env.deployer()
+            .update_current_contract_wasm(new_wasm_hash.clone());
+        Self::bump_instance_ttl(&env);
+        env.events()
+            .publish(
+                (symbol_short!("contract"), symbol_short!("upgraded")),
+                new_wasm_hash,
+            );
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        bump_instance(&env);
+    }
+
+    /// Read-only view of the contract configuration. (CT-28)
+    pub fn get_config(env: Env) -> Config {
+        let store = env.storage().instance();
+        Config {
+            admin: store.get(&ADMIN),
+            pending_admin: store.get(&PENDING_ADMIN),
+            version: CONTRACT_VERSION,
+        }
+    }
+
+    /// Contract code version. (CT-28)
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use soroban_sdk::testutils::{Address as _, Ledger as _};
+
+    #[test]
+    fn record_and_get_offset() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, CarbonOffsetContract);
+        let client = CarbonOffsetContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let verifier = Address::generate(&env);
+
+        client.initialize(&admin);
+        client.authorize_offset(&42, &120, &verifier);
+        client.record_offset(&42, &120, &verifier);
+
+        let record = client.get_offset(&42);
+        assert!(record.is_some());
+        let record = record.unwrap();
+        assert_eq!(record.order_id, 42);
+        assert_eq!(record.kg_co2, 120);
+        assert!(!record.offset_paid);
+        assert_eq!(record.verifier, verifier);
+    }
+
+    #[test]
+    fn missing_offset_returns_none() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, CarbonOffsetContract);
+        let client = CarbonOffsetContractClient::new(&env, &contract_id);
+
+        assert!(client.get_offset(&99).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset already recorded")]
+    fn duplicate_offset_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, CarbonOffsetContract);
+        let client = CarbonOffsetContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let verifier = Address::generate(&env);
+
+        client.initialize(&admin);
+        client.authorize_offset(&1, &10, &verifier);
+        client.record_offset(&1, &10, &verifier);
+        client.authorize_offset(&1, &10, &verifier);
+        client.record_offset(&1, &10, &verifier);
+    }
+
+    #[test]
+    #[should_panic(expected = "kg_co2 must be positive")]
+    fn zero_offset_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, CarbonOffsetContract);
+        let client = CarbonOffsetContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let verifier = Address::generate(&env);
+
+        client.initialize(&admin);
+        client.authorize_offset(&1, &0, &verifier);
+    }
+
+    #[test]
+    #[should_panic(expected = "verifier approval required")]
+    fn offset_requires_verifier_approval() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, CarbonOffsetContract);
+        let client = CarbonOffsetContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let verifier = Address::generate(&env);
+
+        client.initialize(&admin);
+        client.record_offset(&1, &10, &verifier);
+    }
+
+    #[test]
+    #[should_panic]
+    fn verifier_must_authorize_its_approval() {
+        let env = Env::default();
+        let contract_id = env.register_contract(None, CarbonOffsetContract);
+        let client = CarbonOffsetContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let verifier = Address::generate(&env);
+        env.mock_auths(&[&admin]);
+
+        client.initialize(&admin);
+        client.authorize_offset(&1, &10, &verifier);
+    }
+
+    #[test]
+    fn admin_can_amend_and_void_then_reissue_offset() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, CarbonOffsetContract);
+        let client = CarbonOffsetContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        let verifier = Address::generate(&env);
+
+        client.initialize(&admin);
+        client.authorize_offset(&1, &10, &verifier);
+        client.record_offset(&1, &10, &verifier);
+        client.amend_offset(&1, &12, &verifier);
+        assert_eq!(client.get_offset(&1).unwrap().kg_co2, 12);
+
+        client.void_offset(&1);
+        assert!(client.get_offset(&1).is_none());
+        client.authorize_offset(&1, &14, &verifier);
+        client.record_offset(&1, &14, &verifier);
+        assert_eq!(client.get_offset(&1).unwrap().kg_co2, 14);
+    }
+
+    #[test]
+    #[should_panic(expected = "WASM hash must not be zero")]
+    fn zero_upgrade_hash_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register_contract(None, CarbonOffsetContract);
+        let client = CarbonOffsetContractClient::new(&env, &contract_id);
+        let admin = Address::generate(&env);
+        client.initialize(&admin);
+
+        client.upgrade(&BytesN::from_array(&env, &[0; 32]));
+    }
+
+    #[test]
+    fn instance_ttl_extended_across_calls() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let contract_id = env.register_contract(None, CarbonOffsetContract);
+        let client = CarbonOffsetContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let verifier = Address::generate(&env);
+
+        client.initialize(&admin);
+
+        // Advance the ledger past TTL_MIN between calls; the instance config
+        // (admin) must still be readable because each entrypoint bumps the TTL.
+        env.ledger().with_mut(|l| {
+            l.sequence_number += TTL_MIN + 1;
+        });
+
+        client.record_offset(&7, &50, &verifier);
+
+        env.ledger().with_mut(|l| {
+            l.sequence_number += TTL_MIN + 1;
+        });
+
+        let record = client.get_offset(&7);
+        assert_eq!(record.order_id, 7);
+        assert_eq!(record.kg_co2, 50);
         Ok(())
     }
 }

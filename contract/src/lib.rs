@@ -161,6 +161,20 @@ const BUMP_AMOUNT: u32 = 500_000;
 #[contract]
 pub struct EscrowContract;
 
+/// Contract version reported by `version()`. (CT-28)
+pub const CONTRACT_VERSION: u32 = 1;
+
+/// Read-only snapshot of contract configuration. (CT-28)
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Config {
+    pub admin: Option<Address>,
+    pub fee_bps: u32,
+    pub fee_destination: Option<Address>,
+    pub paused: bool,
+    pub version: u32,
+}
+
 #[contractimpl]
 impl EscrowContract {
 
@@ -690,6 +704,23 @@ impl EscrowContract {
             .instance()
             .get(&DataKey::Paused)
             .unwrap_or(false)
+    }
+
+    /// Read-only view of the contract configuration. (CT-28)
+    pub fn get_config(env: Env) -> Config {
+        let store = env.storage().instance();
+        Config {
+            admin: store.get(&DataKey::Admin),
+            fee_bps: store.get(&DataKey::FeeBps).unwrap_or(0),
+            fee_destination: store.get(&DataKey::FeeDestination),
+            paused: store.get(&DataKey::Paused).unwrap_or(false),
+            version: CONTRACT_VERSION,
+        }
+    }
+
+    /// Contract code version. (CT-28)
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
     }
 }
 

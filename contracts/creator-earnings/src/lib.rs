@@ -110,6 +110,19 @@ pub enum DataKey {
 // Contract
 // ---------------------------------------------------------------------------
 
+/// Contract version reported by `version()`. (CT-28)
+pub const CONTRACT_VERSION: u32 = 1;
+
+/// Read-only snapshot of contract configuration. (CT-28)
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Config {
+    pub admin: Option<Address>,
+    pub authorized_caller: Option<Address>,
+    pub paused: bool,
+    pub version: u32,
+}
+
 #[contract]
 pub struct CreatorEarningsContract;
 
@@ -436,6 +449,22 @@ impl CreatorEarningsContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
         env.events().publish(("creator_earnings", "upgrade"), ());
         Ok(())
+    }
+
+    /// Read-only view of the contract configuration. (CT-28)
+    pub fn get_config(env: Env) -> Config {
+        let store = env.storage().instance();
+        Config {
+            admin: store.get(&DataKey::Platform),
+            authorized_caller: store.get(&DataKey::AuthorizedCaller),
+            paused: store.get(&DataKey::PausedState).unwrap_or(false),
+            version: CONTRACT_VERSION,
+        }
+    }
+
+    /// Contract code version. (CT-28)
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
     }
 }
 

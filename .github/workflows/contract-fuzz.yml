@@ -1,0 +1,40 @@
+name: Contract Fuzz
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # nightly at 03:00 UTC
+  workflow_dispatch:
+
+jobs:
+  fuzz-escrow:
+    name: Fuzz escrow (10 min)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts/escrow
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Restore corpus
+        uses: actions/cache@v4
+        with:
+          path: contracts/escrow/fuzz/corpus
+          key: fuzz-corpus-escrow-${{ github.run_id }}
+          restore-keys: fuzz-corpus-escrow-
+
+      - name: Run escrow_ops for 10 minutes
+        run: cargo +nightly fuzz run escrow_ops -- -max_total_time=600
+
+      - name: Upload crashes
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashes-escrow
+          path: contracts/escrow/fuzz/artifacts/
+          retention-days: 30

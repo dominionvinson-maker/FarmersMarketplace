@@ -269,6 +269,25 @@ pub struct CoopConfig {
     pub threshold: u32,
 }
 
+/// Contract version reported by `version()`; bump on every storage/ABI change. (CT-28)
+pub const CONTRACT_VERSION: u32 = 1;
+
+/// Read-only snapshot of all admin-configurable values. (CT-28)
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Config {
+    pub admin: Option<Address>,
+    pub pending_admin: Option<Address>,
+    pub fee_bps: u32,
+    pub fee_destination: Option<Address>,
+    pub min_deposit: i128,
+    pub auto_release_days: u64,
+    pub reward_token: Option<Address>,
+    pub reward_bps: u32,
+    pub paused: bool,
+    pub version: u32,
+}
+
 #[contract]
 pub struct EscrowContract;
 
@@ -2298,6 +2317,33 @@ impl EscrowContract {
         }
 
         Ok(())
+    }
+
+    /// Read-only view of the full contract configuration. (CT-28)
+    pub fn get_config(env: Env) -> Config {
+        let store = env.storage().instance();
+        let admin: Option<AdminTransfer> = store.get(&DataKey::Admin);
+        Config {
+            admin: admin.as_ref().map(|a| a.current_admin.clone()),
+            pending_admin: admin.and_then(|a| a.pending_admin),
+            fee_bps: store.get(&DataKey::FeeBps).unwrap_or(0),
+            fee_destination: store
+                .get(&DataKey::FeeDestination)
+                .or_else(|| store.get(&DataKey::Platform)),
+            min_deposit: store.get(&DataKey::MinDeposit).unwrap_or(MIN_DEPOSIT_STROOPS),
+            auto_release_days: store
+                .get(&DataKey::AutoReleaseDays)
+                .unwrap_or(Self::DEFAULT_AUTO_RELEASE_DAYS),
+            reward_token: store.get(&DataKey::RewardTokenContract),
+            reward_bps: store.get(&DataKey::RewardBps).unwrap_or(100),
+            paused: false,
+            version: CONTRACT_VERSION,
+        }
+    }
+
+    /// Contract code version. (CT-28)
+    pub fn version(_env: Env) -> u32 {
+        CONTRACT_VERSION
     }
 }
 

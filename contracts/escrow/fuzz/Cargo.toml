@@ -1,0 +1,25 @@
+[package]
+name = "soroban-escrow-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+soroban-sdk = { version = "=22.0.0", features = ["testutils"] }
+soroban-escrow = { path = "..", features = ["testutils"] }
+
+# Keep the fuzz crate out of the `contracts/` workspace.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "escrow_ops"
+path = "fuzz_targets/escrow_ops.rs"
+test = false
+doc = false
+bench = false

@@ -4,6 +4,7 @@ members = [
     "creator-earnings",
     "test-utils",
 ]
+exclude = ["escrow/fuzz"]
 resolver = "2"
 
 [workspace.dependencies]
